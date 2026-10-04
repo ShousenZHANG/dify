@@ -92,6 +92,12 @@ class NotFoundError(BaseHTTPException):
     code = 404
 
 
+class UnauthorizedError(BaseHTTPException):
+    error_code = "unauthorized"
+    code = HTTPStatus.UNAUTHORIZED
+    description = "Authentication is required."
+
+
 class InternalServerError(BaseHTTPException):
     """Expose a safe response while retaining the original exception in server logs."""
 
