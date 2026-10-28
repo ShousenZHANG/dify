@@ -4,7 +4,6 @@ providers/vdb/vdb-elasticsearch/tests/unit_tests/src/dify_vdb_elasticsearch/test
 providers/vdb/vdb-hologres/tests/e2e_tests/conftest.py
 providers/vdb/vdb-iris/tests/unit_tests/src/dify_vdb_iris/test_iris_vector.py
 providers/vdb/vdb-lindorm/tests/e2e_tests/test_lindorm.py
-providers/vdb/vdb-lindorm/tests/unit_tests/src/dify_vdb_lindorm/test_lindorm_vector.py
 providers/vdb/vdb-milvus/tests/unit_tests/src/dify_vdb_milvus/test_milvus_vector.py
 providers/vdb/vdb-opengauss/tests/e2e_tests/test_opengauss.py
 providers/vdb/vdb-opensearch/tests/unit_tests/src/dify_vdb_opensearch/test_opensearch_vector.py
