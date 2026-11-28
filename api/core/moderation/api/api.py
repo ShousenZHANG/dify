@@ -1,8 +1,5 @@
 from typing import Any, override
 
-from pydantic import BaseModel, Field, JsonValue
-
-from core.extension.api_based_extension_requestor import APIBasedExtensionPoint
 from core.moderation.base import (
     ApiModerationRuntime,
     Moderation,
@@ -11,17 +8,7 @@ from core.moderation.base import (
     ModerationOutputsResult,
 )
 from core.moderation.factory import get_api_moderation
-
-
-class ModerationInputParams(BaseModel):
-    app_id: str = ""
-    inputs: dict[str, Any] = Field(default_factory=dict)
-    query: str = ""
-
-
-class ModerationOutputParams(BaseModel):
-    app_id: str = ""
-    text: str
+from domain.moderation.api_parameters import ModerationInputParams, ModerationOutputParams
 
 
 class ApiModeration(Moderation):
@@ -56,10 +43,10 @@ class ApiModeration(Moderation):
         if self.config["inputs_config"]["enabled"]:
             params = ModerationInputParams(app_id=self.app_id, inputs=inputs, query=query)
 
-            result = self._get_config_by_requestor(
-                APIBasedExtensionPoint.APP_MODERATION_INPUT,
-                params.model_dump(),
+            result = self._get_runtime().request_inputs(
+                self.tenant_id,
                 self.config.get("api_based_extension_id", ""),
+                params,
             )
             return ModerationInputsResult.model_validate(result)
 
@@ -77,10 +64,10 @@ class ApiModeration(Moderation):
         if self.config["outputs_config"]["enabled"]:
             params = ModerationOutputParams(app_id=self.app_id, text=text)
 
-            result = self._get_config_by_requestor(
-                APIBasedExtensionPoint.APP_MODERATION_OUTPUT,
-                params.model_dump(),
+            result = self._get_runtime().request_outputs(
+                self.tenant_id,
                 self.config.get("api_based_extension_id", ""),
+                params,
             )
             return ModerationOutputsResult.model_validate(result)
 
@@ -88,22 +75,11 @@ class ApiModeration(Moderation):
             flagged=flagged, action=ModerationAction.DIRECT_OUTPUT, preset_response=preset_response
         )
 
-    def _get_config_by_requestor(
-        self, extension_point: APIBasedExtensionPoint, params: dict[str, Any], extension_id: str
-    ) -> JsonValue:
-        """Use the first enabled request's app runtime, preserving it across contexts.
+    def _get_runtime(self) -> ApiModerationRuntime:
+        """Bind on the first enabled request and preserve that runtime across contexts.
 
-        Parameters and the explicit extension ID come from the legacy entrypoint.
-        Missing configuration or runtime bindings fail before external work.
+        A missing or invalid application binding raises before external work.
         """
-        if self.config is None:
-            raise ValueError("The config is not set.")
         if self._runtime is None:
             self._runtime = get_api_moderation()
-        runtime = self._runtime
-        request = (
-            runtime.request_inputs
-            if extension_point == APIBasedExtensionPoint.APP_MODERATION_INPUT
-            else runtime.request_outputs
-        )
-        return request(self.tenant_id, extension_id, params)
+        return self._runtime

@@ -2,6 +2,7 @@
 
 import json
 from collections.abc import Iterator
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 
 import httpx
@@ -14,6 +15,8 @@ from sqlalchemy.orm import Session, sessionmaker
 from core.moderation.api.api import ApiModeration
 from core.moderation.base import Moderation
 from core.moderation.factory import ModerationFactory
+from domain.moderation.api_parameters import ModerationInputParams, ModerationOutputParams
+from graphon.file import File, FileTransferMethod, FileType
 from models.api_based_extension import APIBasedExtension
 from repositories.api_based_extension_repository import APIBasedExtensionRepository
 from services.api_based_extension_adapters import WorkspaceTokenCipher
@@ -29,7 +32,8 @@ def _provide_app_context() -> None:
 @dataclass
 class Outbound:
     events: list[str]
-    calls: list[tuple[str, str, dict[str, object]]] = field(default_factory=list)
+    input_calls: list[tuple[str, ModerationInputParams]] = field(default_factory=list)
+    output_calls: list[tuple[str, ModerationOutputParams]] = field(default_factory=list)
     response: JsonValue = field(default_factory=lambda: {"flagged": False, "action": "direct_output"})
     failure: tuple[str, Exception] | None = None
 
@@ -41,20 +45,23 @@ class Outbound:
         self._fail("decrypt")
         return "plaintext-key"
 
-    def inputs(self, endpoint: str, key: str, params: dict[str, object]) -> JsonValue:
-        return self._request("inputs", endpoint, key, params)
+    def inputs(self, endpoint: str, key: str, params: ModerationInputParams) -> JsonValue:
+        self._record_request("inputs", endpoint, key)
+        self.input_calls.append((endpoint, params))
+        self._fail("request")
+        return self.response
 
-    def outputs(self, endpoint: str, key: str, params: dict[str, object]) -> JsonValue:
-        return self._request("outputs", endpoint, key, params)
+    def outputs(self, endpoint: str, key: str, params: ModerationOutputParams) -> JsonValue:
+        self._record_request("outputs", endpoint, key)
+        self.output_calls.append((endpoint, params))
+        self._fail("request")
+        return self.response
 
-    def _request(self, direction: str, endpoint: str, key: str, params: dict[str, object]) -> JsonValue:
+    def _record_request(self, direction: str, endpoint: str, key: str) -> None:
         assert endpoint == "https://moderation.example"
         assert key == "plaintext-key"
         assert self.events[-2:] == ["checkin", "decrypt"]
         self.events.append(direction)
-        self.calls.append((direction, endpoint, params))
-        self._fail("request")
-        return self.response
 
     def _fail(self, stage: str) -> None:
         if self.failure is not None and self.failure[0] == stage:
@@ -128,7 +135,8 @@ def test_validation_releases_connection_without_decrypting(app: Flask, outbound:
     with app.app_context():
         ApiModeration.validate_config("tenant-a", config())
     assert outbound.events == ["checkout", "checkin"]
-    assert outbound.calls == []
+    assert outbound.input_calls == []
+    assert outbound.output_calls == []
 
 
 def test_validation_lookup_failure_checks_in_and_keeps_error_identity(
@@ -145,7 +153,8 @@ def test_validation_lookup_failure_checks_in_and_keeps_error_identity(
             ApiModeration.validate_config("tenant-a", config())
         assert raised.value is failure
         assert outbound.events == ["checkout", "checkin"]
-        assert outbound.calls == []
+        assert outbound.input_calls == []
+        assert outbound.output_calls == []
     finally:
         event.remove(sqlite_engine, "do_execute", fail_lookup)
 
@@ -164,12 +173,16 @@ def test_enabled_entrypoint_checks_in_before_decrypt_and_request(
         )
     assert result.flagged is False
     assert outbound.events == ["checkout", "checkin", "decrypt", direction]
-    expected = (
-        {"app_id": "app-a", "inputs": {"x": "value"}, "query": "query"}
-        if direction == "inputs"
-        else {"app_id": "app-a", "text": "text"}
-    )
-    assert outbound.calls == [(direction, "https://moderation.example", expected)]
+    if direction == "inputs":
+        assert outbound.input_calls == [
+            ("https://moderation.example", ModerationInputParams(app_id="app-a", inputs={"x": "value"}, query="query"))
+        ]
+        assert outbound.output_calls == []
+    else:
+        assert outbound.output_calls == [
+            ("https://moderation.example", ModerationOutputParams(app_id="app-a", text="text"))
+        ]
+        assert outbound.input_calls == []
 
 
 @pytest.mark.parametrize("operation", ["validate", "inputs", "outputs"])
@@ -182,7 +195,8 @@ def test_absent_or_foreign_extension_has_no_outbound_work(
     with app.app_context(), pytest.raises(ValueError, match="API-based Extension not found"):
         invoke(provider, operation)
     assert outbound.events == ["checkout", "checkin"]
-    assert outbound.calls == []
+    assert outbound.input_calls == []
+    assert outbound.output_calls == []
 
 
 @pytest.mark.parametrize("direction", ["inputs", "outputs"])
@@ -250,7 +264,8 @@ def test_first_enabled_operation_binds_active_app_then_survives_other_contexts(
         outbound.events
         == ["checkout", "checkin", "decrypt", "inputs"] + ["checkout", "checkin", "decrypt", "outputs"] * 2
     )
-    assert other_outbound.calls == []
+    assert other_outbound.input_calls == []
+    assert other_outbound.output_calls == []
 
 
 def test_missing_context_does_not_bind_and_can_retry(app: Flask, outbound: Outbound) -> None:
@@ -329,14 +344,47 @@ def test_runtime_adapters_preserve_wire_payload_and_response_validation(
         request_outputs=request_outputs,
     )
     provider = ApiModeration("app-a", "tenant-a", config())
-    with app.app_context():
-        if malformed_response:
-            with pytest.raises(ValidationError):
-                invoke(provider, direction)
+    file = File(
+        file_id="file-a",
+        file_type=FileType.DOCUMENT,
+        transfer_method=FileTransferMethod.REMOTE_URL,
+        remote_url="https://example.test/file.pdf",
+        filename="file.pdf",
+    )
+    inputs: dict[str, object] = {
+        "nested": {"values": [None, True, 7, 2.5, "text"]},
+        "file_like": {
+            "id": "file-like",
+            "type": "document",
+            "transfer_method": "remote_url",
+            "remote_url": "https://example.test/unconstrained.pdf",
+            "extra": {"keep": [None, False]},
+        },
+        "file": file,
+        "files": [file],
+    }
+    with app.app_context(), pytest.raises(ValidationError) if malformed_response else nullcontext():
+        if direction == "inputs":
+            provider.moderation_for_inputs(inputs)
         else:
-            invoke(provider, direction)
+            provider.moderation_for_outputs("text")
+    expected_file = {
+        "dify_model_identity": "__dify__file__",
+        "id": "file-a",
+        "type": "document",
+        "transfer_method": "remote_url",
+        "remote_url": "https://example.test/file.pdf",
+        "reference": None,
+        "filename": "file.pdf",
+        "extension": None,
+        "mime_type": None,
+        "size": -1,
+    }
     expected_params: dict[str, object] = (
-        {"app_id": "app-a", "inputs": {}, "query": ""} if direction == "inputs" else {"app_id": "app-a", "text": "text"}
+        {"app_id": "app-a", "inputs": inputs | {"file": expected_file, "files": [expected_file]}, "query": ""}
+        if direction == "inputs"
+        else {"app_id": "app-a", "text": "text"}
     )
     point = "app.moderation.input" if direction == "inputs" else "app.moderation.output"
     assert sent == [{"point": point, "params": expected_params}]
+    assert inputs["file"] is file

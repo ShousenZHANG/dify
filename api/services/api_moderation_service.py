@@ -8,6 +8,7 @@ from collections.abc import Callable
 
 from pydantic import JsonValue
 
+from domain.moderation.api_parameters import ModerationInputParams, ModerationOutputParams
 from services.api_based_extension_application_service import APIBasedExtensionRecord
 
 
@@ -19,8 +20,8 @@ class APIModerationService:
         *,
         find_extension: Callable[[str, str], APIBasedExtensionRecord | None],
         decrypt_key: Callable[[str, str], str],
-        request_inputs: Callable[[str, str, dict[str, object]], JsonValue],
-        request_outputs: Callable[[str, str, dict[str, object]], JsonValue],
+        request_inputs: Callable[[str, str, ModerationInputParams], JsonValue],
+        request_outputs: Callable[[str, str, ModerationOutputParams], JsonValue],
     ) -> None:
         """Bind required capabilities without looking up or decrypting credentials."""
         self._find_extension = find_extension
@@ -36,7 +37,7 @@ class APIModerationService:
         """
         self._require_extension(tenant_id, extension_id)
 
-    def request_inputs(self, tenant_id: str, extension_id: str, params: dict[str, object]) -> JsonValue:
+    def request_inputs(self, tenant_id: str, extension_id: str, params: ModerationInputParams) -> JsonValue:
         """Send admitted input parameters after the scoped lookup has finished.
 
         Return the wire response for the caller's existing result validation.
@@ -46,7 +47,7 @@ class APIModerationService:
         key = self._decrypt_key(tenant_id, extension.api_key)
         return self._request_inputs(extension.api_endpoint, key, params)
 
-    def request_outputs(self, tenant_id: str, extension_id: str, params: dict[str, object]) -> JsonValue:
+    def request_outputs(self, tenant_id: str, extension_id: str, params: ModerationOutputParams) -> JsonValue:
         """Send admitted output parameters after the scoped lookup has finished.
 
         Return the wire response for the caller's existing result validation.

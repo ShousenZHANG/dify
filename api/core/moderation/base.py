@@ -11,6 +11,7 @@ from core.extension.extensible import Extensible, ExtensionModule
 
 if TYPE_CHECKING:
     from core.app.app_config.entities import AppConfig
+    from domain.moderation.api_parameters import ModerationInputParams, ModerationOutputParams
 
 
 @runtime_checkable
@@ -23,9 +24,9 @@ class ApiModerationRuntime(Protocol):
 
     def validate_extension(self, tenant_id: str, extension_id: str) -> None: ...
 
-    def request_inputs(self, tenant_id: str, extension_id: str, params: dict[str, object]) -> JsonValue: ...
+    def request_inputs(self, tenant_id: str, extension_id: str, params: ModerationInputParams) -> JsonValue: ...
 
-    def request_outputs(self, tenant_id: str, extension_id: str, params: dict[str, object]) -> JsonValue: ...
+    def request_outputs(self, tenant_id: str, extension_id: str, params: ModerationOutputParams) -> JsonValue: ...
 
 
 @runtime_checkable
